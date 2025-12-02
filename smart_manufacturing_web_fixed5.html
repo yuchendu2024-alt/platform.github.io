@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能制造视觉检测系统 (OpenCV版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#165DFF',
+                        secondary: '#36CFFB',
+                        success: '#00B42A',
+                        warning: '#FF7D00',
+                        danger: '#F53F3F',
+                        info: '#86909C',
+                        dark: '#1D2129',
+                        light: '#F2F3F5'
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .content-auto { content-visibility: auto; }
+            .backdrop-blur-sm { backdrop-filter: blur(4px); }
+            .scrollbar-hide::-webkit-scrollbar { display: none; }
+            .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+            .btn-hover { @apply transition-all duration-300 hover:shadow-lg hover:-translate-y-0.5; }
+            .card-hover { @apply transition-all duration-300 hover:shadow-xl hover:border-primary; }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex flex-col">
+    <header class="bg-primary text-white shadow-md">
+        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+            <div class="flex items-center space-x-2">
+                <i class="fa fa-industry text-2xl"></i>
+                <h1 class="text-xl font-bold">智能制造视觉检测系统</h1>
+            </div>
+            <div class="flex items-center space-x-4">
+                <span id="opencv-status" class="bg-yellow-500 text-xs px-2 py-1 rounded">正在加载 OpenCV...</span>
+                <span id="current-time" class="text-sm font-medium"></span>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 container mx-auto px-4 py-6">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div class="lg:col-span-2 space-y-6">
+                <div class="bg-white rounded-lg shadow-md overflow-hidden card-hover">
+                    <div class="relative aspect-video bg-gray-900">
+                        <video id="video" class="absolute inset-0 w-full h-full object-cover hidden" playsinline></video>
+                        <canvas id="canvasOutput" class="absolute inset-0 w-full h-full object-contain"></canvas>
+                        <div class="absolute top-4 left-4 bg-black/70 text-white text-xs px-2 py-1 rounded-md backdrop-blur-sm">
+                            <span id="camera-status" class="flex items-center">
+                                <i id="camera-indicator" class="fa fa-circle text-danger mr-1"></i>
+                                <span id="camera-text">摄像头未连接</span>
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <div class="p-4 border-t border-gray-200">
+                        <div class="flex flex-wrap gap-3">
+                            <button id="open-camera" class="flex-1 bg-primary hover:bg-primary/90 text-white py-2 px-4 rounded-md btn-hover" disabled>
+                                <i class="fa fa-video-camera mr-2"></i>打开摄像头
+                            </button>
+                            <button id="close-camera" class="flex-1 bg-gray-500 hover:bg-gray-600 text-white py-2 px-4 rounded-md btn-hover" disabled>
+                                <i class="fa fa-times mr-2"></i>关闭摄像头
+                            </button>
+                            </div>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-lg shadow-md p-4 card-hover">
+                    <h2 class="text-lg font-semibold mb-4 flex items-center">
+                        <i class="fa fa-bar-chart text-primary mr-2"></i>实时识别结果
+                    </h2>
+                    <div id="detection-result" class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div class="border border-gray-200 rounded-lg p-3 text-center">
+                            <div class="text-sm text-gray-500">检测状态</div>
+                            <div id="detection-status" class="font-semibold text-danger">停止</div>
+                        </div>
+                        <div class="border border-gray-200 rounded-lg p-3 text-center">
+                            <div class="text-sm text-gray-500">识别颜色</div>
+                            <div id="color-value" class="font-semibold">--</div>
+                        </div>
+                        <div class="border border-gray-200 rounded-lg p-3 text-center">
+                            <div class="text-sm text-gray-500">轮廓面积</div>
+                            <div id="area-value" class="font-semibold">0</div>
+                        </div>
+                        <div class="border border-gray-200 rounded-lg p-3 text-center">
+                            <div class="text-sm text-gray-500">FPS</div>
+                            <div id="fps-value" class="font-semibold">0</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="space-y-6">
+                <div class="bg-white rounded-lg shadow-md p-4 card-hover">
+                    <h2 class="text-lg font-semibold mb-4 flex items-center">
+                        <i class="fa fa-file-text text-primary mr-2"></i>系统日志
+                    </h2>
+                    <div id="system-log" class="h-96 overflow-y-auto bg-gray-50 p-3 rounded-md text-sm text-gray-700 scrollbar-hide font-mono"></div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // === 全局变量 ===
+        let videoElement = document.getElementById('video');
+        let canvasOutput = document.getElementById('canvasOutput');
+        let canvasContext = canvasOutput.getContext('2d');
+        let stream = null;
+        let isCameraOpen = false;
+        let isOpenCvReady = false;
+        
+        // OpenCV 变量 (为了性能，我们重用这些变量，不反复创建)
+        let src = null;
+        let dst = null;
+        let hsv = null;
+        let mask = null;
+        let maskRed1 = null;
+        let maskRed2 = null;
+        let maskBlue = null;
+        let contours = null;
+        let hierarchy = null;
+        let cap = null;
+        
+        // 阈值 (对应 test999999_fixed.py 中的 np.array)
+        // 注意：OpenCV.js 中颜色顺序通常是 RGBA 转 RGB 转 HSV
+        let lowRed1, highRed1, lowRed2, highRed2, lowBlue, highBlue;
+
+        // === 1. 初始化 ===
+        function onOpenCvReady() {
+            document.getElementById('opencv-status').textContent = "OpenCV 就绪";
+            document.getElementById('opencv-status').className = "bg-green-500 text-white text-xs px-2 py-1 rounded";
+            document.getElementById('open-camera').disabled = false;
+            isOpenCvReady = true;
+            addLog("OpenCV.js 加载完成，引擎就绪。");
+        }
+
+        window.onload = function() {
+            updateCurrentTime();
+            setInterval(updateCurrentTime, 1000);
+            
+            document.getElementById('open-camera').addEventListener('click', startCamera);
+            document.getElementById('close-camera').addEventListener('click', stopCamera);
+        };
+
+        function updateCurrentTime() {
+            document.getElementById('current-time').textContent = new Date().toLocaleString();
+        }
+
+        function addLog(msg) {
+            let log = document.getElementById('system-log');
+            let div = document.createElement('div');
+            div.className = "mb-1 border-b border-gray-100 pb-1";
+            div.innerHTML = `<span class="text-gray-400">[${new Date().toLocaleTimeString()}]</span> ${msg}`;
+            log.appendChild(div);
+            log.scrollTop = log.scrollHeight;
+        }
+
+        // === 2. 摄像头控制 ===
+        function startCamera() {
+            if (!isOpenCvReady) return;
+            
+            navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'environment' }, audio: false })
+                .then(function(s) {
+                    stream = s;
+                    videoElement.srcObject = stream;
+                    videoElement.play();
+                    
+                    isCameraOpen = true;
+                    document.getElementById('open-camera').disabled = true;
+                    document.getElementById('close-camera').disabled = false;
+                    
+                    updateStatus(true);
+                    addLog("摄像头已打开");
+
+                    // 等待视频开始播放后初始化 OpenCV 对象
+                    videoElement.onloadedmetadata = function() {
+                        setTimeout(initOpenCVObjects, 500);
+                    };
+                })
+                .catch(function(err) {
+                    addLog("打开摄像头失败: " + err);
+                });
+        }
+
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+            isCameraOpen = false;
+            document.getElementById('open-camera').disabled = false;
+            document.getElementById('close-camera').disabled = true;
+            updateStatus(false);
+            addLog("摄像头已关闭");
+            
+            // 清理内存
+            cleanUpOpenCV();
+        }
+
+        function updateStatus(active) {
+            let indicator = document.getElementById('camera-indicator');
+            let text = document.getElementById('camera-text');
+            let dStatus = document.getElementById('detection-status');
+            
+            if (active) {
+                indicator.className = "fa fa-circle text-success mr-1";
+                text.textContent = "摄像头运行中";
+                dStatus.textContent = "运行中";
+                dStatus.className = "font-semibold text-success";
+            } else {
+                indicator.className = "fa fa-circle text-danger mr-1";
+                text.textContent = "摄像头关闭";
+                dStatus.textContent = "停止";
+                dStatus.className = "font-semibold text-danger";
+            }
+        }
+
+        // === 3. 核心视觉算法 (翻译自 Python) ===
+        function initOpenCVObjects() {
+            let width = videoElement.videoWidth;
+            let height = videoElement.videoHeight;
+            
+            canvasOutput.width = width;
+            canvasOutput.height = height;
+
+            // 初始化矩阵
+            src = new cv.Mat(height, width, cv.CV_8UC4);
+            dst = new cv.Mat(height, width, cv.CV_8UC3); // RGB
+            hsv = new cv.Mat(height, width, cv.CV_8UC3); // HSV
+            mask = new cv.Mat();
+            maskRed1 = new cv.Mat();
+            maskRed2 = new cv.Mat();
+            maskBlue = new cv.Mat();
+            contours = new cv.MatVector();
+            hierarchy = new cv.Mat();
+            
+            // 初始化阈值 (对应 Python 的 NumPy 数组)
+            // Python: lower_red1 = np.array([0, 50, 50])
+            lowRed1 = new cv.Mat(height, width, cv.CV_8UC3, [0, 50, 50, 0]);
+            highRed1 = new cv.Mat(height, width, cv.CV_8UC3, [10, 255, 255, 0]);
+            
+            lowRed2 = new cv.Mat(height, width, cv.CV_8UC3, [170, 50, 50, 0]);
+            highRed2 = new cv.Mat(height, width, cv.CV_8UC3, [180, 255, 255, 0]);
+            
+            // Python: lower_blue = np.array([100, 50, 50])
+            lowBlue = new cv.Mat(height, width, cv.CV_8UC3, [100, 50, 50, 0]);
+            highBlue = new cv.Mat(height, width, cv.CV_8UC3, [125, 255, 255, 0]);
+
+            // 创建 VideoCapture
+            cap = new cv.VideoCapture(videoElement);
+            
+            addLog("视觉矩阵初始化完成，开始处理帧...");
+            requestAnimationFrame(processVideoFrame);
+        }
+
+        function cleanUpOpenCV() {
+            // 释放内存，防止崩溃
+            if(src) src.delete();
+            if(dst) dst.delete();
+            if(hsv) hsv.delete();
+            if(mask) mask.delete();
+            if(maskRed1) maskRed1.delete();
+            if(maskRed2) maskRed2.delete();
+            if(maskBlue) maskBlue.delete();
+            if(contours) contours.delete();
+            if(hierarchy) hierarchy.delete();
+            if(lowRed1) lowRed1.delete();
+            if(highRed1) highRed1.delete();
+            if(lowRed2) lowRed2.delete();
+            if(highRed2) highRed2.delete();
+            if(lowBlue) lowBlue.delete();
+            if(highBlue) highBlue.delete();
+        }
+
+        let lastTime = Date.now();
+        let frameCount = 0;
+
+        function processVideoFrame() {
+            if (!isCameraOpen) return;
+
+            try {
+                let begin = Date.now();
+
+                // 1. 读取帧
+                cap.read(src);
+
+                // 2. 转换颜色空间 (RGBA -> RGB -> HSV)
+                cv.cvtColor(src, dst, cv.COLOR_RGBA2RGB);
+                cv.cvtColor(dst, hsv, cv.COLOR_RGB2HSV);
+
+                // 3. 颜色检测逻辑
+                // 红色检测 (两个区间)
+                cv.inRange(hsv, lowRed1, highRed1, maskRed1);
+                cv.inRange(hsv, lowRed2, highRed2, maskRed2);
+                cv.bitwise_or(maskRed1, maskRed2, mask); // 合并红色掩码
+                
+                // 蓝色检测
+                cv.inRange(hsv, lowBlue, highBlue, maskBlue);
+
+                // 4. 轮廓查找与绘制
+                let colorDetected = "--";
+                let maxArea = 0;
+                let colorLabelColor = "text-gray-500";
+                let contourColor = new cv.Scalar(0, 255, 0); // 默认绿色轮廓
+
+                // 先检查蓝色 (优先级逻辑参考 Python 代码)
+                let blueFound = checkContours(maskBlue, "蓝色");
+                if (blueFound.found) {
+                    colorDetected = "蓝色";
+                    maxArea = blueFound.area;
+                    colorLabelColor = "text-primary";
+                    contourColor = new cv.Scalar(0, 0, 255); // RGB格式，这里是蓝色
+                    cv.drawContours(dst, blueFound.contoursVec, -1, contourColor, 3);
+                } else {
+                    // 如果没蓝，查红
+                    let redFound = checkContours(mask, "红色");
+                    if (redFound.found) {
+                        colorDetected = "红色";
+                        maxArea = redFound.area;
+                        colorLabelColor = "text-danger";
+                        contourColor = new cv.Scalar(255, 0, 0); // 红色
+                        cv.drawContours(dst, redFound.contoursVec, -1, contourColor, 3);
+                    }
+                }
+
+                // 5. 显示结果到 Canvas
+                cv.imshow('canvasOutput', dst);
+
+                // 6. 更新UI数据
+                document.getElementById('color-value').textContent = colorDetected;
+                document.getElementById('color-value').className = "font-semibold " + colorLabelColor;
+                document.getElementById('area-value').textContent = Math.round(maxArea);
+
+                // 计算FPS
+                frameCount++;
+                if (Date.now() - lastTime >= 1000) {
+                    document.getElementById('fps-value').textContent = frameCount;
+                    frameCount = 0;
+                    lastTime = Date.now();
+                }
+
+                // 循环
+                let delay = 1000/30 - (Date.now() - begin);
+                setTimeout(() => requestAnimationFrame(processVideoFrame), delay);
+
+            } catch (err) {
+                addLog("处理帧错误: " + err);
+                console.error(err);
+            }
+        }
+
+        // 辅助函数：检测特定掩码中的轮廓
+        function checkContours(inputMask, label) {
+            // 清理旧轮廓
+            // 注意：findContours 会修改 hierarchy，需要重新分配或清理
+            let tempContours = new cv.MatVector();
+            let tempHierarchy = new cv.Mat();
+            
+            cv.findContours(inputMask, tempContours, tempHierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+            
+            let found = false;
+            let maxArea = 0;
+            
+            // 遍历轮廓
+            for (let i = 0; i < tempContours.size(); ++i) {
+                let cnt = tempContours.get(i);
+                let area = cv.contourArea(cnt);
+                
+                // 阈值判断 (Python: > 1800)
+                if (area > 1800) {
+                    found = true;
+                    if (area > maxArea) maxArea = area;
+                }
+            }
+            
+            // 重要：OpenCV.js 需要手动管理 MatVector，但为了绘制方便，我们这里返回 Vector
+            // 在主循环中我们使用全局的 contours 对象来避免频繁创建
+            // 这里为了简单，返回局部对象，并在下一帧自动覆盖（JS GC会处理JS对象，但OpenCV内存需注意）
+            // 严谨写法应该 delete tempHierarchy，保留 tempContours 给外面画
+            tempHierarchy.delete();
+            
+            return { found: found, area: maxArea, contoursVec: tempContours }; 
+            // 注意：tempContours 需要在画完后 delete，我们在下一帧开始前其实依赖 JS GC 回收 MatVector 的 wrapper，
+            // 但底层的 C++ 内存如果没 delete 会泄漏。
+            // 简化起见，我们在主循环里不保存引用，让它自然销毁是不够的。
+            // *修正*：为了演示代码的稳定性，这里做一个简单的内存清理约定：
+            // 实际上在 processVideoFrame 里每次循环都应该清理 tempContours。
+            // 由于 JS 闭包复杂，我们暂且依赖 OpenCV.js 的 delete。
+            // 正确做法：把 tempContours 传出去，画完立刻 delete。
+        }
+        
+        // 修正后的 checkContours 内存管理策略：
+        // 实际上 checkContours 内部 new 的 MatVector 如果不 delete 会泄漏。
+        // 我们改为在主函数里做 findContours。
+    </script>
+    
+    <script>
+        // 覆盖上面的 processVideoFrame 中的 checkContours 调用部分，改用更安全的写法
+        
+        // 重新定义核心循环
+        processVideoFrame = function() {
+            if (!isCameraOpen) return;
+            try {
+                cap.read(src);
+                cv.cvtColor(src, dst, cv.COLOR_RGBA2RGB);
+                cv.cvtColor(dst, hsv, cv.COLOR_RGB2HSV);
+
+                // 红
+                cv.inRange(hsv, lowRed1, highRed1, maskRed1);
+                cv.inRange(hsv, lowRed2, highRed2, maskRed2);
+                cv.bitwise_or(maskRed1, maskRed2, mask);
+                // 蓝
+                cv.inRange(hsv, lowBlue, highBlue, maskBlue);
+
+                let colorDetected = "--";
+                let maxArea = 0;
+                let colorLabelColor = "text-gray-500";
+                
+                // 1. 找蓝色
+                cv.findContours(maskBlue, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+                let blueFound = false;
+                for (let i = 0; i < contours.size(); ++i) {
+                    let area = cv.contourArea(contours.get(i));
+                    if (area > 1800) {
+                        blueFound = true;
+                        maxArea = Math.max(maxArea, area);
+                    }
+                }
+                
+                if (blueFound) {
+                    colorDetected = "蓝色";
+                    colorLabelColor = "text-primary";
+                    cv.drawContours(dst, contours, -1, new cv.Scalar(0, 0, 255), 3); // 画蓝
+                } else {
+                    // 2. 找红色 (复用 contours 变量)
+                    // 清空 contours (OpenCV.js 没有 clear，只能重新 findContours 覆盖)
+                    cv.findContours(mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+                    let redFound = false;
+                    for (let i = 0; i < contours.size(); ++i) {
+                        let area = cv.contourArea(contours.get(i));
+                        if (area > 1800) {
+                            redFound = true;
+                            maxArea = Math.max(maxArea, area);
+                        }
+                    }
+                    
+                    if (redFound) {
+                        colorDetected = "红色";
+                        colorLabelColor = "text-danger";
+                        cv.drawContours(dst, contours, -1, new cv.Scalar(255, 0, 0), 3); // 画红
+                    }
+                }
+
+                cv.imshow('canvasOutput', dst);
+
+                document.getElementById('color-value').textContent = colorDetected;
+                document.getElementById('color-value').className = "font-semibold " + colorLabelColor;
+                document.getElementById('area-value').textContent = Math.round(maxArea);
+
+                requestAnimationFrame(processVideoFrame);
+            } catch (err) {
+                console.error(err);
+            }
+        }
+    </script>
+</body>
+</html>
